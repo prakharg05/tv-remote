@@ -1,10 +1,11 @@
 # Architecture
 
-Laptop → Android TV over the **Android TV Remote protocol v2** (TLS, LAN only). No ADB.
+The computer controls the TV with the Android TV Remote protocol v2.
+The protocol uses TLS on the local network. ADB is not necessary.
 
 ```mermaid
 flowchart LR
-  subgraph Laptop
+  subgraph Computer
     CLI["tv_cli.py<br/>(tv …)"] --> CORE
     UI["ui.html"] <-->|"HTTP + SSE<br/>127.0.0.1, token"| SRV["tvui.py"]
     SRV --> CORE["tvremote.py<br/>core"]
@@ -16,7 +17,7 @@ flowchart LR
   CORE -->|"TLS 6467 pair<br/>TLS 6466 control"| TV["Android TV<br/>Remote Service"]
 ```
 
-## Flows
+## Sequence
 
 ```mermaid
 sequenceDiagram
@@ -28,42 +29,45 @@ sequenceDiagram
   T-->>C: name, IP
   U->>C: pair(host)
   C->>T: start pairing (6467)
-  T-->>U: shows 6-char code
+  T-->>U: shows 6-character code
   U->>C: code
-  C->>T: secret → trusted
-  Note over C: save TV by cert MAC
-  U->>C: key / text / open link
-  C->>T: remote msg (6466)
+  C->>T: secret
+  Note over C: save TV by certificate MAC
+  U->>C: key, text or link
+  C->>T: remote message (6466)
   T-->>C: volume, app, power, errors
 ```
 
 ## Files
 
-| File | Role |
+| File | Function |
 |---|---|
-| `tvremote.py` | Config, discover, pair, connect (+relocate on IP change), features, error capture |
-| `mdns.py` | Stdlib mDNS browser |
-| `profiles.py` | Per-model verified behaviour; `DEFAULT` for unknown TVs |
-| `tv_cli.py` | CLI; `tv check` = compatibility report |
-| `tvui.py` / `ui.html` | Local server (one persistent TV connection) + single-file page |
+| `tvremote.py` | Config, discovery, pairing, connection, features, TV errors |
+| `mdns.py` | mDNS browser. Uses the standard library only. |
+| `profiles.py` | Tested behavior for each TV model. `DEFAULT` for other TVs. |
+| `tv_cli.py` | CLI. `tv check` gives a compatibility report. |
+| `tvui.py`, `ui.html` | Local server and page. The server keeps one TV connection open. |
 
 ## Rules
 
-- **Deps:** only `androidtvremote2` (hash-pinned in `requirements.lock`). Stdlib for everything else.
-- **Secrets** live in `~/.config/tv-remote/` (0600), never in the repo.
-- **UI server:** loopback only, per-run token, Host check; pairing only to private IPs.
-- **Profiles:** only list what was verified on a real TV. The TV gives **no error** for ignored keys.
+- Use only one dependency: `androidtvremote2`. Keep it hash-pinned in `requirements.lock`.
+- Keep secrets in `~/.config/tv-remote/` (mode 0600). Do not put them in the repo.
+- Keep the UI server on loopback, with a token and a Host check.
+- Pair only with private IP addresses.
+- In a profile, put only behavior that you tested on a real TV. The TV gives no error for an ignored key.
 
-## Gotchas
+## Known problems
 
-- Keys sent before the TV's first state push are dropped → `open_remote()` waits for it.
-- `market://launch?id=` has no handler on many TVs → use app-declared deep links (`profiles.COMMON_APPS`).
-- Library only *logs* TV error replies → `tvremote.launch()` captures them.
-- Feature flags read from a private library attr (`features()`); re-check on library upgrade.
+| Problem | Solution |
+|---|---|
+| The TV ignores keys before its first state message. | `open_remote()` waits for that message. |
+| Many TVs cannot open `market://launch?id=` links. | Use the deep links that the apps declare (`profiles.COMMON_APPS`). |
+| The library only logs TV error replies. | `tvremote.launch()` captures the log. |
+| `features()` reads a private library field. | Check it after a library upgrade. |
 
-## Verify a change
+## Test a change
 
 ```sh
-./tv check          # end-to-end against your TV
-./tv ui             # visual check
+./tv check
+./tv ui
 ```
