@@ -1,0 +1,9 @@
+#!/bin/sh
+# Launcher: run the tv CLI with this project's virtualenv. Works when symlinked onto PATH.
+SELF=$0
+while [ -L "$SELF" ]; do
+  LINK=$(readlink "$SELF")
+  case $LINK in /*) SELF=$LINK ;; *) SELF=$(dirname "$SELF")/$LINK ;; esac
+done
+DIR=$(cd "$(dirname "$SELF")" && pwd)
+exec "$DIR/.venv/bin/python" "$DIR/tv_cli.py" "$@"

@@ -1,0 +1,475 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TV Remote</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #181b21; --btn: #232731; --btn-hover: #2c313d; --btn-active: #3a4152;
+    --text: #e8eaef; --muted: #8a909c; --accent: #7c8cff; --ok: #45c46b; --warn: #e6a23c; --bad: #e5534b;
+    --radius: 14px;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg: #f3f4f7; --panel: #ffffff; --btn: #e9ebf0; --btn-hover: #dfe2e9; --btn-active: #cfd3dd;
+            --text: #1b1e24; --muted: #6b717d; }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--bg); color: var(--text);
+    font: 14px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    -webkit-user-select: none; user-select: none;
+    display: flex; justify-content: center;
+  }
+  main { width: 100%; max-width: 380px; padding: 14px 16px 12px; display: flex; flex-direction: column; gap: 14px; }
+
+  /* Header / status */
+  header { display: flex; align-items: center; gap: 10px; }
+  .title { flex: 1; min-width: 0; }
+  .title h1 { font-size: 15px; margin: 0; font-weight: 600; }
+  .status { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
+  .dot.connected { background: var(--ok); } .dot.reconnecting, .dot.connecting { background: var(--warn); }
+  .dot.offline, .dot.unpaired { background: var(--bad); }
+  .now { background: var(--panel); border-radius: var(--radius); padding: 10px 12px; display: flex; align-items: center; gap: 12px; }
+  .now .app { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
+  .now .label { font-size: 11px; color: var(--muted); font-weight: 400; display: block; }
+  .vol { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .bar { width: 64px; height: 5px; border-radius: 3px; background: var(--btn); overflow: hidden; }
+  .bar > i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .15s; }
+  .vol.muted .bar > i { background: var(--muted); }
+
+  /* Buttons */
+  button {
+    font: inherit; color: inherit; border: 0; cursor: pointer; background: var(--btn);
+    border-radius: 12px; height: 44px; display: grid; place-items: center; transition: background .08s, transform .08s;
+  }
+  button:hover { background: var(--btn-hover); }
+  button:active, button.flash { background: var(--btn-active); transform: scale(.96); }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  button svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .icon-btn { width: 40px; height: 40px; border-radius: 50%; }
+  .power { color: var(--bad); }
+  .row { display: grid; gap: 10px; }
+  .row.c3 { grid-template-columns: repeat(3, 1fr); }
+  .row.c4 { grid-template-columns: repeat(4, 1fr); }
+
+  /* D-pad */
+  .dpad { position: relative; width: 224px; height: 224px; margin: 2px auto; border-radius: 50%; background: var(--panel); }
+  .dpad button { position: absolute; background: transparent; border-radius: 0; }
+  .dpad button:hover { background: var(--btn-hover); }
+  .dpad button:active, .dpad button.flash { background: var(--btn-active); transform: none; }
+  .dpad .up    { left: 72px; top: 0; width: 80px; height: 72px; border-radius: 40px 40px 0 0; }
+  .dpad .down  { left: 72px; bottom: 0; width: 80px; height: 72px; border-radius: 0 0 40px 40px; }
+  .dpad .left  { left: 0; top: 72px; width: 72px; height: 80px; border-radius: 40px 0 0 40px; }
+  .dpad .right { right: 0; top: 72px; width: 72px; height: 80px; border-radius: 0 40px 40px 0; }
+  .dpad .ok {
+    left: 72px; top: 72px; width: 80px; height: 80px; border-radius: 50%;
+    background: var(--btn); font-weight: 600; letter-spacing: .5px;
+  }
+  .dpad .ok:hover { background: var(--btn-hover); }
+  .dpad .ok:active, .dpad .ok.flash { background: var(--accent); color: #fff; }
+
+  /* Apps */
+  .section-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .6px; margin: 0 0 -6px 2px; }
+  .apps button { height: 38px; font-size: 12px; font-weight: 500; }
+
+  /* Type */
+  form { display: flex; gap: 8px; }
+  input {
+    flex: 1; min-width: 0; height: 40px; border-radius: 12px; border: 1px solid transparent; padding: 0 12px;
+    background: var(--panel); color: var(--text); font: inherit; outline: none;
+  }
+  input:focus { border-color: var(--accent); }
+  form button { width: 64px; height: 40px; font-size: 13px; }
+
+  footer { font-size: 11px; color: var(--muted); text-align: center; line-height: 1.6; }
+  kbd { font: inherit; padding: 0 4px; border-radius: 4px; background: var(--btn); }
+
+  .toast {
+    position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%) translateY(20px); opacity: 0;
+    background: var(--bad); color: #fff; padding: 8px 14px; border-radius: 10px; font-size: 12px;
+    transition: .2s; pointer-events: none; max-width: 90%;
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  .disabled main > :not(header):not(.now) { opacity: .45; pointer-events: none; }
+  .off { opacity: .35; pointer-events: none; }
+  [hidden] { display: none !important; }
+
+  /* TV switcher button in the header */
+  .tvbtn { all: unset; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; border-radius: 6px; }
+  .tvbtn:hover h1 { text-decoration: underline; text-underline-offset: 3px; }
+  .tvbtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .tvbtn svg { width: 14px; height: 14px; fill: none; stroke: var(--muted); stroke-width: 2.5; }
+
+  /* TV panel (switch / find / pair) */
+  .panel { position: fixed; inset: 0; background: var(--bg); display: flex; justify-content: center; overflow-y: auto; z-index: 5; }
+  .panel > div { width: 100%; max-width: 380px; padding: 14px 16px 20px; display: flex; flex-direction: column; gap: 12px; }
+  .panel-head { display: flex; align-items: center; justify-content: space-between; }
+  .panel-head h2 { font-size: 16px; margin: 0; }
+  .panel p.hint { margin: 0; color: var(--muted); font-size: 12px; }
+  .card { background: var(--panel); border-radius: var(--radius); padding: 4px; display: flex; flex-direction: column; }
+  .item { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 10px; }
+  .item + .item { border-top: 1px solid var(--btn); border-radius: 0; }
+  .item .meta { flex: 1; min-width: 0; }
+  .item .meta b { display: block; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .item .meta span { font-size: 11px; color: var(--muted); }
+  .item button { height: 30px; padding: 0 12px; font-size: 12px; border-radius: 8px; }
+  .item .badge { font-size: 11px; color: var(--ok); }
+  .primary { background: var(--accent); color: #fff; }
+  .primary:hover { background: var(--accent); filter: brightness(1.1); }
+  .ghost { background: transparent; color: var(--muted); }
+  .ghost:hover { background: var(--btn); color: var(--text); }
+  .wide { width: 100%; height: 40px; font-weight: 600; }
+  .error { color: var(--bad); font-size: 12px; margin: 0; }
+  #code { font: 600 22px/1 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 6px; text-align: center;
+          text-transform: uppercase; height: 52px; flex: none; }
+  .spinner { width: 14px; height: 14px; border: 2px solid var(--muted); border-top-color: transparent; border-radius: 50%;
+             animation: spin .8s linear infinite; display: inline-block; vertical-align: -2px; margin-right: 6px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  details summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+  details form { margin-top: 8px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="title">
+      <button class="tvbtn" id="tvswitch" title="Switch, find or pair TVs (T)" aria-label="TVs">
+        <h1 id="tvname">TV</h1><svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
+      </button>
+      <div class="status"><span class="dot connecting" id="dot"></span><span id="status">Connecting…</span></div>
+    </div>
+    <button class="icon-btn power" id="powerbtn" data-key="POWER" title="Power (P)" aria-label="Power">
+      <svg viewBox="0 0 24 24"><path d="M12 3v8"/><path d="M6.3 7.3a8 8 0 1 0 11.4 0"/></svg>
+    </button>
+  </header>
+
+  <section class="now">
+    <div class="app"><span class="label">Now on screen</span><span id="app">—</span></div>
+    <div class="vol" id="vol" title="Volume"><div class="bar"><i id="volbar"></i></div><span id="volnum">–</span></div>
+  </section>
+
+  <div class="dpad" data-needs="keys">
+    <button class="up" data-key="DPAD_UP" data-repeat aria-label="Up"><svg viewBox="0 0 24 24"><path d="M6 15l6-6 6 6"/></svg></button>
+    <button class="left" data-key="DPAD_LEFT" data-repeat aria-label="Left"><svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg></button>
+    <button class="ok" data-key="DPAD_CENTER" aria-label="OK">OK</button>
+    <button class="right" data-key="DPAD_RIGHT" data-repeat aria-label="Right"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></button>
+    <button class="down" data-key="DPAD_DOWN" data-repeat aria-label="Down"><svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button>
+  </div>
+
+  <div class="row c3" data-needs="keys">
+    <button data-key="BACK" title="Back (⌫ / Esc)" aria-label="Back"><svg viewBox="0 0 24 24"><path d="M9 14L4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg></button>
+    <button data-key="HOME" title="Home (H)" aria-label="Home"><svg viewBox="0 0 24 24"><path d="M3 10.5L12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg></button>
+    <button data-key="SETTINGS" title="Settings (S)" aria-label="Settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
+  </div>
+
+  <div class="row c4" data-needs="keys">
+    <button data-key="VOLUME_DOWN" data-repeat title="Volume down (−)" aria-label="Volume down"><svg viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M17 12h4"/></svg></button>
+    <button data-key="VOLUME_MUTE" title="Mute (M)" aria-label="Mute"><svg viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M17 9l4 6M21 9l-4 6"/></svg></button>
+    <button data-key="VOLUME_UP" data-repeat title="Volume up (+)" aria-label="Volume up"><svg viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M17 12h4M19 10v4"/></svg></button>
+    <button data-key="MEDIA_PLAY_PAUSE" title="Play / pause (Space)" aria-label="Play or pause"><svg viewBox="0 0 24 24"><path d="M6 5l7 7-7 7z"/><path d="M16 6v12M20 6v12"/></svg></button>
+  </div>
+
+  <p class="section-label">Apps</p>
+  <div class="row c4 apps" id="apps" data-needs="open"></div>
+
+  <p class="section-label" id="inputs-label" hidden>Inputs</p>
+  <div class="row c3 apps" id="inputs" hidden></div>
+
+  <form id="typeform" autocomplete="off" data-needs="text">
+    <input id="text" placeholder="Type on TV…  ( / )" aria-label="Text to type on the TV">
+    <button type="submit">Send</button>
+  </form>
+
+  <footer>
+    <kbd>←↑→↓</kbd> move · <kbd>⏎</kbd> OK · <kbd>⌫</kbd> back · <kbd>H</kbd> home · <kbd>Space</kbd> play<br>
+    <kbd>+</kbd><kbd>−</kbd> volume · <kbd>M</kbd> mute · <span id="inputhint"></span><kbd>S</kbd> settings · <kbd>/</kbd> type
+  </footer>
+</main>
+<div class="panel" id="panel" hidden>
+  <div>
+    <div class="panel-head">
+      <h2 id="panel-title">TVs</h2>
+      <button class="icon-btn ghost" id="panel-close" title="Close (Esc)" aria-label="Close">
+        <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+
+    <!-- Step: list saved + found TVs -->
+    <section id="step-list" style="display:flex;flex-direction:column;gap:12px">
+      <p class="hint" id="setup-hint" hidden>Let's connect to your TV. It must be on, and on the same Wi-Fi as this computer.</p>
+      <div id="saved-wrap">
+        <p class="section-label" style="margin:0 0 6px 2px">Saved</p>
+        <div class="card" id="saved"></div>
+      </div>
+      <button class="wide" id="scan">Find TVs on this Wi-Fi</button>
+      <div id="found-wrap" hidden>
+        <p class="section-label" style="margin:0 0 6px 2px">On this network</p>
+        <div class="card" id="found"></div>
+      </div>
+      <details>
+        <summary>TV not listed? Enter its IP address</summary>
+        <form id="manual" autocomplete="off">
+          <input id="manual-ip" placeholder="192.168.1.20" inputmode="decimal" aria-label="TV IP address">
+          <button type="submit">Pair</button>
+        </form>
+      </details>
+      <p class="error" id="list-error" hidden></p>
+    </section>
+
+    <!-- Step: enter the code shown on the TV -->
+    <section id="step-code" style="display:flex;flex-direction:column;gap:12px" hidden>
+      <p class="hint">Enter the 6-character code now showing on <b id="pair-name">the TV</b>.</p>
+      <form id="codeform" autocomplete="off" style="flex-direction:column">
+        <input id="code" maxlength="6" spellcheck="false" placeholder="••••••" aria-label="Pairing code">
+        <button type="submit" class="primary wide" id="code-submit">Pair</button>
+      </form>
+      <p class="error" id="code-error" hidden></p>
+      <button class="ghost wide" id="code-cancel">Cancel</button>
+    </section>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+"use strict";
+const token = new URLSearchParams(location.search).get("t");
+const $ = (id) => document.getElementById(id);
+const STATUS_TEXT = { connecting: "Connecting…", connected: "Connected", reconnecting: "Reconnecting…",
+                      offline: "TV unreachable", unpaired: "Not paired", setup: "Not set up" };
+
+let toastTimer;
+function toast(msg) {
+  const t = $("toast"); t.textContent = msg; t.classList.add("show");
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove("show"), 2500);
+}
+
+async function post(path, body) {
+  try {
+    const res = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json", "X-TV-Token": token },
+                                    body: JSON.stringify(body) });
+    if (!res.ok) toast((await res.json().catch(() => ({}))).error || `Error ${res.status}`);
+  } catch { toast("Remote server stopped. Run: tv ui"); }
+}
+const sendKey = (key) => post("/api/key", { key });
+
+function flash(el) { if (!el) return; el.classList.add("flash"); setTimeout(() => el.classList.remove("flash"), 120); }
+
+// Buttons: tap sends once; data-repeat buttons repeat while held.
+document.querySelectorAll("button[data-key]").forEach((btn) => {
+  let delay, interval;
+  const stop = () => { clearTimeout(delay); clearInterval(interval); };
+  btn.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    sendKey(btn.dataset.key);
+    if (btn.hasAttribute("data-repeat")) {
+      delay = setTimeout(() => { interval = setInterval(() => sendKey(btn.dataset.key), 130); }, 400);
+    }
+  });
+  ["pointerup", "pointerleave", "pointercancel"].forEach((ev) => btn.addEventListener(ev, stop));
+  btn.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") e.preventDefault(); });
+});
+
+// Apps and inputs come from the server: common app links plus this TV's verified profile.
+let INPUT_KEYS = {};
+function launcher(id, label) {
+  const b = document.createElement("button");
+  b.textContent = label; b.title = `Open ${label}`; b.dataset.open = id;
+  b.addEventListener("click", () => post("/api/open", { app: id }));
+  return b;
+}
+function inputKeyButton() {
+  const b = document.createElement("button");
+  b.textContent = "Input"; b.title = "Input (I)"; b.dataset.key = "TV_INPUT";
+  b.addEventListener("click", () => sendKey("TV_INPUT"));
+  return b;
+}
+let builtFor = null;
+function buildLayout(info) {
+  const sig = JSON.stringify(info);
+  if (sig === builtFor) return;
+  builtFor = sig;
+  $("tvname").textContent = info.name; document.title = `${info.name} — Remote`;
+  $("apps").replaceChildren(...info.apps.map((a) => launcher(a.id, a.label)));
+  INPUT_KEYS = {};
+  const inputs = info.inputs.map((a, i) => { INPUT_KEYS[String(i + 1)] = a.id; return launcher(a.id, a.label); });
+  if (!inputs.length && info.input_key) inputs.push(inputKeyButton());
+  $("inputs").replaceChildren(...inputs);
+  $("inputs").hidden = $("inputs-label").hidden = !inputs.length;
+  const n = info.inputs.length;
+  $("inputhint").innerHTML = n ? `<kbd>1</kbd>–<kbd>${n}</kbd> inputs · ` : (info.input_key ? "<kbd>I</kbd> input · " : "");
+}
+
+// Typing
+$("typeform").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const v = $("text").value; if (!v) return;
+  post("/api/text", { text: v }); $("text").value = "";
+});
+
+// Keyboard shortcuts (ignored while typing in the text box)
+const KEYMAP = { ArrowUp: "DPAD_UP", ArrowDown: "DPAD_DOWN", ArrowLeft: "DPAD_LEFT", ArrowRight: "DPAD_RIGHT",
+                 Enter: "DPAD_CENTER", Backspace: "BACK", Escape: "BACK", h: "HOME", " ": "MEDIA_PLAY_PAUSE",
+                 "+": "VOLUME_UP", "=": "VOLUME_UP", "-": "VOLUME_DOWN", m: "VOLUME_MUTE", s: "SETTINGS", p: "POWER" };
+document.addEventListener("keydown", (e) => {
+  if (!panel.hidden) return;
+  if (e.target === $("text")) { if (e.key === "Escape") $("text").blur(); return; }
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.key === "/") { e.preventDefault(); $("text").focus(); return; }
+  if (e.key.toLowerCase() === "t") { e.preventDefault(); openPanel(); return; }
+  if (INPUT_KEYS[e.key]) {
+    e.preventDefault(); post("/api/open", { app: INPUT_KEYS[e.key] });
+    flash(document.querySelector(`button[data-open="${INPUT_KEYS[e.key]}"]`)); return;
+  }
+  let key = KEYMAP[e.key.length === 1 ? e.key.toLowerCase() : e.key];
+  if (e.key.toLowerCase() === "i" && builtFor && JSON.parse(builtFor).input_key) key = "TV_INPUT";
+  if (!key) return;
+  e.preventDefault();
+  sendKey(key);  // held keys auto-repeat via the OS
+  flash(document.querySelector(`button[data-key="${key}"]`));
+});
+
+// TV panel: switch between saved TVs, find TVs on the network, pair
+let lastState = null;
+const panel = $("panel");
+function showError(id, msg) { $(id).textContent = msg || ""; $(id).hidden = !msg; }
+async function api(path, body) {
+  const res = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json", "X-TV-Token": token },
+                                  body: JSON.stringify(body || {}) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `Error ${res.status}`);
+  return data;
+}
+function busy(btn, label) {
+  const old = btn.innerHTML; btn.disabled = true; btn.innerHTML = `<span class="spinner"></span>${label}`;
+  return () => { btn.disabled = false; btn.innerHTML = old; };
+}
+function item(title, sub, actions) {
+  const row = document.createElement("div"); row.className = "item";
+  const meta = document.createElement("div"); meta.className = "meta";
+  const b = document.createElement("b"); b.textContent = title;
+  const s = document.createElement("span"); s.textContent = sub;
+  meta.append(b, s); row.append(meta, ...actions);
+  return row;
+}
+function action(label, cls, fn) {
+  const b = document.createElement("button"); b.textContent = label; if (cls) b.className = cls;
+  b.addEventListener("click", () => fn(b)); return b;
+}
+function renderSaved(s) {
+  const tvs = s.tvs || [];
+  $("saved-wrap").hidden = !tvs.length;
+  $("saved").replaceChildren(...tvs.map((tv) => {
+    const current = tv.id === s.current;
+    const acts = [];
+    if (current) { const badge = document.createElement("span"); badge.className = "badge"; badge.textContent = "In use"; acts.push(badge); }
+    else acts.push(action("Use", "primary", async (b) => {
+      const done = busy(b, "");
+      try { await api("/api/select", { id: tv.id }); closePanel(); } catch (e) { showError("list-error", e.message); } finally { done(); }
+    }));
+    acts.push(action("Forget", "ghost", async () => {
+      if (!confirm(`Forget ${tv.name}? You'll need to pair again to use it.`)) return;
+      try { await api("/api/forget", { id: tv.id }); } catch (e) { showError("list-error", e.message); }
+    }));
+    return item(tv.name, [tv.host, tv.model].filter(Boolean).join(" · "), acts);
+  }));
+}
+async function scan() {
+  showError("list-error");
+  const done = busy($("scan"), "Searching…");
+  try {
+    const { tvs } = await api("/api/discover");
+    $("found-wrap").hidden = false;
+    if (!tvs.length) {
+      $("found").replaceChildren(item("No TVs found", "Check the TV is on and on this Wi-Fi (not a guest network), and no VPN is on.", []));
+      return;
+    }
+    $("found").replaceChildren(...tvs.map((tv) => {
+      if (!tv.supported) return item(tv.name, `${tv.host || "?"} · not supported (old remote service)`, []);
+      const label = tv.saved ? "Re-pair" : "Pair";
+      return item(tv.name, tv.host + (tv.saved ? " · saved" : ""), [action(label, tv.saved ? "" : "primary", (b) => startPair(tv.host, b))]);
+    }));
+  } catch (e) { showError("list-error", e.message); } finally { done(); }
+}
+async function startPair(host, btn) {
+  showError("list-error");
+  const done = btn ? busy(btn, "") : () => {};
+  try {
+    const { name } = await api("/api/pair/start", { host });
+    $("pair-name").textContent = name;
+    $("step-list").hidden = true; $("step-code").hidden = false;
+    showError("code-error"); $("code").value = ""; $("code").focus();
+  } catch (e) { showError("list-error", e.message); } finally { done(); }
+}
+function backToList() { $("step-code").hidden = true; $("step-list").hidden = false; }
+$("codeform").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const code = $("code").value.trim().toUpperCase();
+  if (!/^[0-9A-F]{6}$/.test(code)) { showError("code-error", "The code is 6 characters (0–9, A–F)."); return; }
+  const done = busy($("code-submit"), "Pairing…");
+  try { await api("/api/pair/finish", { code }); backToList(); panel.hidden = true; toast("Paired"); }
+  catch (err) {
+    showError("code-error", err.message);
+    if (/expired|closed pairing/i.test(err.message)) setTimeout(backToList, 1500);
+  } finally { done(); }
+});
+$("code-cancel").addEventListener("click", () => { api("/api/pair/cancel").catch(() => {}); backToList(); });
+$("manual").addEventListener("submit", (e) => { e.preventDefault(); startPair($("manual-ip").value.trim(), e.submitter); });
+$("scan").addEventListener("click", scan);
+
+let autoScanned = false;
+function openPanel() {
+  panel.hidden = false; showError("list-error");
+  if (lastState) renderSaved(lastState);
+  if (!(lastState?.tvs || []).length && !autoScanned) { autoScanned = true; scan(); }
+}
+function closePanel() {
+  if (lastState && lastState.status === "setup") return;  // nothing to go back to yet
+  if (!$("step-code").hidden) { api("/api/pair/cancel").catch(() => {}); backToList(); }
+  panel.hidden = true;
+}
+$("tvswitch").addEventListener("click", openPanel);
+$("panel-close").addEventListener("click", closePanel);
+document.addEventListener("keydown", (e) => { if (!panel.hidden && e.key === "Escape") { e.stopImmediatePropagation(); closePanel(); } }, true);
+
+// Live state
+function render(s) {
+  lastState = s;
+  const setup = s.status === "setup";
+  $("setup-hint").hidden = !setup;
+  $("panel-close").hidden = setup;
+  $("panel-title").textContent = setup ? "Set up" : "TVs";
+  if (setup) { $("tvname").textContent = "No TV yet"; openPanel(); }
+  if (!panel.hidden) renderSaved(s);
+  if (s.info) buildLayout(s.info);
+  const f = s.features;  // null = unknown: leave everything enabled
+  document.querySelectorAll("[data-needs]").forEach((el) => el.classList.toggle("off", !!f && !f[el.dataset.needs]));
+  $("inputs").classList.toggle("off", !!f && !f.open);
+  $("powerbtn").hidden = !!f && !f.power;
+  $("vol").hidden = !!f && !f.volume;
+  $("dot").className = "dot " + s.status;
+  $("status").textContent = s.message || STATUS_TEXT[s.status] || s.status;
+  document.body.classList.toggle("disabled", s.status !== "connected");
+  $("app").textContent = s.power === false ? "TV is off" : (s.app_name || "—");
+  if (s.volume) {
+    const pct = Math.round((s.volume.level / (s.volume.max || 100)) * 100);
+    $("volbar").style.width = pct + "%";
+    $("volnum").textContent = s.volume.muted ? "muted" : s.volume.level;
+    $("vol").classList.toggle("muted", !!s.volume.muted);
+  }
+}
+function connectEvents() {
+  const es = new EventSource(`/api/events?t=${encodeURIComponent(token)}`);
+  es.onmessage = (e) => render(JSON.parse(e.data));
+  es.onerror = () => {
+    render({ status: "offline", message: "Remote server stopped. Run: tv ui" });
+    es.close(); setTimeout(connectEvents, 3000);
+  };
+}
+connectEvents();
+</script>
+</body>
+</html>
