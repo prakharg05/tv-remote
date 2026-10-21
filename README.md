@@ -31,6 +31,7 @@ Refer to [INSTALL.md](INSTALL.md). It has steps for persons and for AI agents.
 
 ---
 
-Works for me, should work for y'all.
+Works for me, should work for y'all. 
+PS: Live mode is fast with keyboard.
 
 Claude helped a lot.
