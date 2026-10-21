@@ -1,6 +1,6 @@
 # tv-remote 📺
 
-> So, the TV was getting slow, and searching for the remote is a pain. This helps.
+> So, the TV was getting slower, and searching for the remote is a pain. This helps.
 
 tv-remote controls an Android TV or Google TV from a computer on the same Wi-Fi.
 It gives a remote window and a `tv` command.
