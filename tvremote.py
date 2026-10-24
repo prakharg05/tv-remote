@@ -46,6 +46,14 @@ KEYS = {
     "del": "DEL",
 }
 
+# Single-key shortcuts, shared by `tv live` and the remote window so they stay identical.
+# Both also have: arrows = move, Enter = OK, Backspace/Esc = Back, t or / = type text,
+# 1-9 = the profile's inputs, i = Input key (only where the profile says it works).
+SHORTCUTS = {
+    "h": "HOME", "b": "BACK", "s": "SETTINGS", "p": "POWER", "m": "VOLUME_MUTE",
+    "+": "VOLUME_UP", "=": "VOLUME_UP", "-": "VOLUME_DOWN", " ": "MEDIA_PLAY_PAUSE",
+}
+
 # Package id -> display name, for showing the current app
 APP_NAMES = {
     "com.netflix.ninja": "Netflix",
@@ -231,11 +239,14 @@ async def start_pairing(host: str) -> PairingSession:
     await ensure_cert()
     remote = make_remote(host)
     try:
-        name, mac = await asyncio.wait_for(remote.async_get_name_and_mac(), CONNECT_TIMEOUT)
+        # The certificate holds the model name; the mDNS advert holds the user's name for the TV.
+        (cert_name, mac), found = await asyncio.wait_for(asyncio.gather(
+            remote.async_get_name_and_mac(), asyncio.to_thread(discover, 1.5)), CONNECT_TIMEOUT)
         await asyncio.wait_for(remote.async_start_pairing(), CONNECT_TIMEOUT)
     except asyncio.TimeoutError as exc:
         remote.disconnect()
         raise CannotConnect(f"Timed out connecting to {host}") from exc
+    name = next((f.name for f in found if f.supported and f.host == host), cert_name)
     return PairingSession(remote, host, name, mac)
 
 
@@ -310,9 +321,87 @@ async def connect_tv(tv_id: str, tv: dict) -> AndroidTVRemote:
             new_id = (await identify(tv["host"]))[1]
         except (CannotConnect, OSError):
             pass
+    mac = await asyncio.to_thread(lookup_mac, tv["host"])  # for Wake-on-LAN later
     remember_tv(new_id, {**tv, "manufacturer": info.get("manufacturer"), "model": info.get("model"),
-                         "paired": True}, replace=tv_id)
+                         "paired": True, **({"wol_mac": mac} if mac else {})}, replace=tv_id)
     return remote
+
+
+# --- waking from deep standby ---------------------------------------------------
+# In screen-off standby the remote service still answers, so WAKEUP/POWER keys work.
+# In deep standby it does not; Wake-on-LAN (if the TV has it on) is the only way in.
+# The packet needs the TV's network MAC, which differs from the MAC in its pairing
+# certificate, so it is read from this computer's ARP table while the TV is reachable.
+
+def lookup_mac(host: str) -> str | None:
+    """The MAC this computer's ARP table has for host, as aa:bb:cc:dd:ee:ff."""
+    import re
+    import subprocess
+    try:
+        if Path("/proc/net/arp").exists():  # Linux
+            text = Path("/proc/net/arp").read_text()
+            text = "\n".join(line for line in text.splitlines() if line.split()[:1] == [host])
+        else:  # macOS: arp -n IP; Windows: arp -a IP
+            cmd = ["arp", "-a", host] if os.name == "nt" else ["arp", "-n", host]
+            text = subprocess.run(cmd, capture_output=True, text=True, timeout=3).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    m = re.search(r"([0-9a-fA-F]{1,2})[:-]([0-9a-fA-F]{1,2})[:-]([0-9a-fA-F]{1,2})[:-]"
+                  r"([0-9a-fA-F]{1,2})[:-]([0-9a-fA-F]{1,2})[:-]([0-9a-fA-F]{1,2})", text)
+    if not m:
+        return None
+    mac = ":".join(part.zfill(2).lower() for part in m.groups())  # macOS drops leading zeros
+    return None if mac in ("ff:ff:ff:ff:ff:ff", "00:00:00:00:00:00") else mac
+
+
+def send_wol(mac: str, host: str | None = None) -> None:
+    """Send Wake-on-LAN magic packets (broadcast and, if known, the host's /24 broadcast)."""
+    payload = b"\xff" * 6 + bytes.fromhex(mac.replace(":", "")) * 16
+    targets = ["255.255.255.255"]
+    if host and is_private_ip(host):
+        targets.append(".".join(host.split(".")[:3] + ["255"]))
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        for _ in range(3):
+            for target in targets:
+                for port in (9, 7):
+                    try:
+                        sock.sendto(payload, (target, port))
+                    except OSError:
+                        pass
+
+
+async def wake_tv(tv_id: str, tv: dict, ensure_on: bool = True,
+                  timeout: float = 30) -> tuple[AndroidTVRemote, bool]:
+    """Connect to a TV, using Wake-on-LAN first if it does not answer. Returns (remote, used_wol).
+
+    With ensure_on (or after Wake-on-LAN) it sends POWER only if the TV says it is off.
+    Many TVs ignore WAKEUP over this protocol, and POWER is a toggle, so check first.
+    """
+    used_wol = False
+    try:
+        remote = await connect_tv(tv_id, tv)
+    except TVError:
+        mac = tv.get("wol_mac")
+        if not mac:
+            raise TVError(f"{tv.get('name', 'The TV')} is in deep standby, and no network address is "
+                          "saved for Wake-on-LAN yet. Turn it on once with its remote, then try again.") from None
+        send_wol(mac, tv.get("host"))
+        used_wol = True
+        deadline = asyncio.get_running_loop().time() + timeout
+        while True:
+            await asyncio.sleep(2)
+            try:
+                remote = await open_remote(tv["host"])
+                break
+            except (CannotConnect, ConnectionClosed, OSError):
+                if asyncio.get_running_loop().time() > deadline:
+                    raise TVError(f"{tv.get('name', 'The TV')} did not wake up. Its Wake-on-LAN may not "
+                                  "work over Wi-Fi; use its own remote.") from None
+                send_wol(mac, tv.get("host"))
+    if (ensure_on or used_wol) and not remote.is_on:
+        remote.send_key_command("POWER")
+    return remote, used_wol
 
 
 @asynccontextmanager
@@ -360,7 +449,9 @@ def resolve_link(name: str, profile: dict) -> str:
 
 
 def resolve_key(name: str) -> str:
-    return KEYS.get(name.lower()) or name.upper().removeprefix("KEYCODE_")
+    """Alias (`back`), shortcut letter (`b`, as in `tv live`) or library key name (`DPAD_UP`)."""
+    lower = name.lower()
+    return KEYS.get(lower) or SHORTCUTS.get(lower) or name.upper().removeprefix("KEYCODE_")
 
 
 # --- TV error replies ----------------------------------------------------------

@@ -110,6 +110,7 @@ class Manager:
         targets = lambda d: [{"id": k, "label": label} for k, (label, _) in d.items()]  # noqa: E731
         return {"name": self.tv.get("name", "TV"), "apps": targets(profiles.COMMON_APPS),
                 "inputs": targets(self.profile["inputs"]), "input_key": self.profile["input_key"],
+                "shortcuts": core.SHORTCUTS,
                 "profile": self.profile["label"], "verified": self.profile is not profiles.DEFAULT}
 
     def _disconnect(self):
@@ -159,6 +160,23 @@ class Manager:
         if remote.current_app:
             self._on_app(remote.current_app)
         self._publish_tvs()
+
+    async def wake(self):
+        """Power button while the TV does not answer: Wake-on-LAN, then reconnect."""
+        if self.tv_id is None:
+            raise core.TVError("No TV selected.")
+        if self.remote is not None:
+            if not self.remote.is_on:  # many TVs ignore WAKEUP; POWER is a toggle
+                self.remote.send_key_command("POWER")
+            return
+        self.state.update(status="connecting", message="Waking the TV…")
+        try:
+            remote, _ = await core.wake_tv(self.tv_id, self.tv, ensure_on=True)
+        except core.TVError as exc:
+            self.state.update(status="offline", message=str(exc))
+            raise
+        remote.disconnect()  # select() opens the long-lived connection with callbacks
+        await self.select(self.tv_id)
 
     def _on_app(self, package: str):
         self.state.update(app=package, app_name=core.APP_NAMES.get(package, package))
@@ -280,6 +298,8 @@ class Handler(BaseHTTPRequestHandler):
                     mgr.call("send_text", text)
             elif path == "/api/open":
                 mgr.run_coro(mgr.open(core.resolve_link(str(body.get("app", "")), mgr.profile)), timeout=5)
+            elif path == "/api/wake":
+                mgr.run_coro(mgr.wake(), timeout=60)
             elif path == "/api/discover":
                 result = {"tvs": mgr.run_coro(mgr.discover())}
             elif path == "/api/pair/start":

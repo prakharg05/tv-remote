@@ -66,8 +66,41 @@ def _expand(tokens: list[str]) -> list[str]:
     return keys
 
 
+WAKE_KEYS = ("WAKEUP", "POWER")
+
+
+async def _press_with_wake(args, keys):
+    """wake = turn on if off; power = toggle. Both reach a TV in deep standby via Wake-on-LAN."""
+    first = keys[0]
+    try:
+        tv_id, tv = core.get_tv(args.tv)
+        remote, used_wol = await core.wake_tv(tv_id, tv, ensure_on=first == "WAKEUP")
+    except InvalidAuth:
+        fail("The TV doesn't recognise this computer (pairing was reset?). Run: tv pair")
+    except core.TVError as exc:
+        fail(str(exc))
+    if used_wol:
+        print("Woke the TV with Wake-on-LAN.", file=sys.stderr)
+    if first == "WAKEUP" or used_wol:  # the TV is on now; another POWER would turn it off
+        while keys and keys[0] in WAKE_KEYS:
+            keys = keys[1:]
+    try:
+        for i, key in enumerate(keys):
+            if i:
+                await asyncio.sleep(KEY_DELAY)
+            try:
+                remote.send_key_command(key)
+            except ValueError:
+                fail(f"unknown key '{key}'. See: tv keys")
+    finally:
+        await asyncio.sleep(0.3)
+        remote.disconnect()
+
+
 async def cmd_press(args):
     keys = _expand(args.keys)
+    if keys and keys[0] in WAKE_KEYS:
+        return await _press_with_wake(args, keys)
 
     async def run(remote, tv):
         if "TV_INPUT" in keys and not core.profile_for(tv)["input_key"]:
@@ -316,11 +349,10 @@ async def cmd_check(args):
 
 # --- live (terminal) -----------------------------------------------------------
 
+# Terminal escape sequences for the special keys; letters come from core.SHORTCUTS.
 LIVE_KEYS = {
     "\x1b[A": "DPAD_UP", "\x1b[B": "DPAD_DOWN", "\x1b[C": "DPAD_RIGHT", "\x1b[D": "DPAD_LEFT",
-    "\r": "DPAD_CENTER", "\n": "DPAD_CENTER", " ": "MEDIA_PLAY_PAUSE",
-    "\x7f": "BACK", "\x1b": "BACK", "b": "BACK", "h": "HOME", "+": "VOLUME_UP", "=": "VOLUME_UP",
-    "-": "VOLUME_DOWN", "m": "VOLUME_MUTE", "s": "SETTINGS", "p": "POWER", "i": "TV_INPUT",
+    "\r": "DPAD_CENTER", "\n": "DPAD_CENTER", "\x7f": "BACK", "\x1b": "BACK", **core.SHORTCUTS,
 }
 
 
@@ -332,30 +364,36 @@ async def cmd_live(args):
         fail("`tv live` needs a Unix terminal. On Windows use `tv ui`.")
 
     async def run(remote, tv):
-        inputs = list(core.profile_for(tv)["inputs"].values())
+        profile = core.profile_for(tv)
+        inputs = list(profile["inputs"].values())
         digits = {str(i): link for i, (_, link) in enumerate(inputs, 1)}
+        keys = {**LIVE_KEYS, **({"i": "TV_INPUT"} if profile["input_key"] else {})}
         help_text = ("arrows=move  enter=ok  backspace/esc/b=back  h=home  space=play/pause  +/-=volume  "
-                     "m=mute  s=settings  p=power  t=type  q=quit")
-        help_text += f"  1-{len(digits)}=inputs" if digits else "  i=input"
+                     "m=mute  s=settings  p=power  t or /=type  q=quit")
+        if digits:
+            help_text += f"  1-{len(digits)}=inputs"
+        elif profile["input_key"]:
+            help_text += "  i=input"
         print(help_text + "\r")
         fd = sys.stdin.fileno()
         saved = termios.tcgetattr(fd)
         try:
-            tty.setraw(fd)
+            tty.setraw(fd, termios.TCSANOW)
             while True:
                 ch = await asyncio.to_thread(_read_key, fd)
                 if ch in ("q", "\x03"):
                     break
-                if ch == "t":
-                    termios.tcsetattr(fd, termios.TCSADRAIN, saved)
+                if ch in ("t", "/"):
+                    # Switch modes at once and keep type-ahead (TCSAFLUSH would drop it)
+                    termios.tcsetattr(fd, termios.TCSANOW, saved)
                     text = await asyncio.to_thread(input, "type> ")
                     if text:
                         remote.send_text(text)
-                    tty.setraw(fd)
+                    tty.setraw(fd, termios.TCSANOW)
                 elif ch in digits:
                     remote.send_launch_app_command(digits[ch])
-                elif ch in LIVE_KEYS:
-                    remote.send_key_command(LIVE_KEYS[ch])
+                elif ch in keys:
+                    remote.send_key_command(keys[ch])
         finally:
             termios.tcsetattr(fd, termios.TCSADRAIN, saved)
             print()

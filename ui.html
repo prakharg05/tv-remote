@@ -71,6 +71,24 @@
   .dpad .ok:hover { background: var(--btn-hover); }
   .dpad .ok:active, .dpad .ok.flash { background: var(--accent); color: #fff; }
 
+  /* Navigation mode toggle + swipe area */
+  .mode { display: flex; gap: 4px; padding: 3px; margin: 0 auto -4px; background: var(--panel); border-radius: 10px; width: max-content; }
+  .mode button { height: 26px; padding: 0 14px; font-size: 12px; border-radius: 8px; background: transparent; color: var(--muted); }
+  .mode button[aria-selected="true"] { background: var(--btn); color: var(--text); }
+  .swipe {
+    position: relative; height: 224px; border-radius: 22px; background: var(--panel); cursor: grab;
+    display: grid; place-items: center; touch-action: none; outline: none; overflow: hidden;
+  }
+  .swipe:active { cursor: grabbing; }
+  .swipe:focus-visible { box-shadow: 0 0 0 2px var(--accent); }
+  .swipe .hint { color: var(--muted); font-size: 12px; text-align: center; line-height: 1.6; pointer-events: none; }
+  .swipe.tapped { background: var(--btn-active); }
+  .swipe .arrow {
+    position: absolute; width: 44px; height: 44px; border-radius: 50%; background: var(--accent); opacity: 0;
+    pointer-events: none; transition: opacity .25s, transform .25s;
+  }
+  .swipe .arrow.show { opacity: .5; transition: none; }
+
   /* Apps */
   .section-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .6px; margin: 0 0 -6px 2px; }
   .apps button { height: 38px; font-size: 12px; font-weight: 500; }
@@ -136,7 +154,7 @@
 <main>
   <header>
     <div class="title">
-      <button class="tvbtn" id="tvswitch" title="Switch, find or pair TVs (T)" aria-label="TVs">
+      <button class="tvbtn" id="tvswitch" title="Switch, find or pair TVs (L)" aria-label="TVs">
         <h1 id="tvname">TV</h1><svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
       </button>
       <div class="status"><span class="dot connecting" id="dot"></span><span id="status">Connecting…</span></div>
@@ -151,7 +169,18 @@
     <div class="vol" id="vol" title="Volume"><div class="bar"><i id="volbar"></i></div><span id="volnum">–</span></div>
   </section>
 
-  <div class="dpad" data-needs="keys">
+  <div class="mode" role="tablist" aria-label="Navigation mode">
+    <button role="tab" data-mode="dpad" title="D-pad (W toggles)">D-pad</button>
+    <button role="tab" data-mode="swipe" title="Swipe (W toggles)">Swipe</button>
+  </div>
+
+  <div class="swipe" id="swipe" data-needs="keys" hidden tabindex="0"
+       aria-label="Swipe area: drag or scroll to move, click for OK">
+    <span class="hint">Drag or two-finger scroll to move<br>Click for OK</span>
+    <i class="arrow" id="swipe-arrow"></i>
+  </div>
+
+  <div class="dpad" id="dpad" data-needs="keys">
     <button class="up" data-key="DPAD_UP" data-repeat aria-label="Up"><svg viewBox="0 0 24 24"><path d="M6 15l6-6 6 6"/></svg></button>
     <button class="left" data-key="DPAD_LEFT" data-repeat aria-label="Left"><svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg></button>
     <button class="ok" data-key="DPAD_CENTER" aria-label="OK">OK</button>
@@ -179,13 +208,14 @@
   <div class="row c3 apps" id="inputs" hidden></div>
 
   <form id="typeform" autocomplete="off" data-needs="text">
-    <input id="text" placeholder="Type on TV…  ( / )" aria-label="Text to type on the TV">
+    <input id="text" placeholder="Type on TV…  (T)" aria-label="Text to type on the TV">
     <button type="submit">Send</button>
   </form>
 
   <footer>
-    <kbd>←↑→↓</kbd> move · <kbd>⏎</kbd> OK · <kbd>⌫</kbd> back · <kbd>H</kbd> home · <kbd>Space</kbd> play<br>
-    <kbd>+</kbd><kbd>−</kbd> volume · <kbd>M</kbd> mute · <span id="inputhint"></span><kbd>S</kbd> settings · <kbd>/</kbd> type
+    <kbd>←↑→↓</kbd> move · <kbd>⏎</kbd> OK · <kbd>⌫</kbd>/<kbd>B</kbd> back · <kbd>H</kbd> home · <kbd>Space</kbd> play<br>
+    <kbd>+</kbd><kbd>−</kbd> volume · <kbd>M</kbd> mute · <span id="inputhint"></span><kbd>S</kbd> settings · <kbd>P</kbd> power<br>
+    <kbd>T</kbd>/<kbd>/</kbd> type · <kbd>L</kbd> TVs · <kbd>W</kbd> swipe
   </footer>
 </main>
 <div class="panel" id="panel" hidden>
@@ -254,7 +284,14 @@ async function post(path, body) {
     if (!res.ok) toast((await res.json().catch(() => ({}))).error || `Error ${res.status}`);
   } catch { toast("Remote server stopped. Run: tv ui"); }
 }
-const sendKey = (key) => post("/api/key", { key });
+// Power while the TV does not answer (deep standby) goes through Wake-on-LAN instead.
+const sendKey = (key) => {
+  if ((key === "POWER" || key === "WAKEUP") && typeof lastState !== "undefined" && lastState?.status === "offline") {
+    toast("Waking the TV…");
+    return post("/api/wake", {});
+  }
+  return post("/api/key", { key });
+};
 
 function flash(el) { if (!el) return; el.classList.add("flash"); setTimeout(() => el.classList.remove("flash"), 120); }
 
@@ -293,6 +330,8 @@ function buildLayout(info) {
   if (sig === builtFor) return;
   builtFor = sig;
   $("tvname").textContent = info.name; document.title = `${info.name} — Remote`;
+  SHORTCUTS = info.shortcuts || {};
+  INPUT_KEY_WORKS = !!info.input_key;
   $("apps").replaceChildren(...info.apps.map((a) => launcher(a.id, a.label)));
   INPUT_KEYS = {};
   const inputs = info.inputs.map((a, i) => { INPUT_KEYS[String(i + 1)] = a.id; return launcher(a.id, a.label); });
@@ -310,27 +349,89 @@ $("typeform").addEventListener("submit", (e) => {
   post("/api/text", { text: v }); $("text").value = "";
 });
 
-// Keyboard shortcuts (ignored while typing in the text box)
-const KEYMAP = { ArrowUp: "DPAD_UP", ArrowDown: "DPAD_DOWN", ArrowLeft: "DPAD_LEFT", ArrowRight: "DPAD_RIGHT",
-                 Enter: "DPAD_CENTER", Backspace: "BACK", Escape: "BACK", h: "HOME", " ": "MEDIA_PLAY_PAUSE",
-                 "+": "VOLUME_UP", "=": "VOLUME_UP", "-": "VOLUME_DOWN", m: "VOLUME_MUTE", s: "SETTINGS", p: "POWER" };
+// Keyboard shortcuts: the same as `tv live` (letters come from the server's shared table).
+// Window-only extras: L = TVs panel, W = D-pad/Swipe. Ignored while typing or in the panel.
+const SPECIAL_KEYS = { ArrowUp: "DPAD_UP", ArrowDown: "DPAD_DOWN", ArrowLeft: "DPAD_LEFT", ArrowRight: "DPAD_RIGHT",
+                       Enter: "DPAD_CENTER", Backspace: "BACK", Escape: "BACK" };
+let SHORTCUTS = {};
+let INPUT_KEY_WORKS = false;
 document.addEventListener("keydown", (e) => {
   if (!panel.hidden) return;
   if (e.target === $("text")) { if (e.key === "Escape") $("text").blur(); return; }
   if (e.metaKey || e.ctrlKey || e.altKey) return;
-  if (e.key === "/") { e.preventDefault(); $("text").focus(); return; }
-  if (e.key.toLowerCase() === "t") { e.preventDefault(); openPanel(); return; }
-  if (INPUT_KEYS[e.key]) {
-    e.preventDefault(); post("/api/open", { app: INPUT_KEYS[e.key] });
-    flash(document.querySelector(`button[data-open="${INPUT_KEYS[e.key]}"]`)); return;
+  const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  if (k === "t" || k === "/") { e.preventDefault(); $("text").focus(); return; }
+  if (k === "l") { e.preventDefault(); openPanel(); return; }
+  if (k === "w") { e.preventDefault(); setMode($("swipe").hidden ? "swipe" : "dpad"); return; }
+  if (INPUT_KEYS[k]) {
+    e.preventDefault(); post("/api/open", { app: INPUT_KEYS[k] });
+    flash(document.querySelector(`button[data-open="${INPUT_KEYS[k]}"]`)); return;
   }
-  let key = KEYMAP[e.key.length === 1 ? e.key.toLowerCase() : e.key];
-  if (e.key.toLowerCase() === "i" && builtFor && JSON.parse(builtFor).input_key) key = "TV_INPUT";
+  const key = SPECIAL_KEYS[k] || SHORTCUTS[k] || (k === "i" && INPUT_KEY_WORKS ? "TV_INPUT" : null);
   if (!key) return;
   e.preventDefault();
   sendKey(key);  // held keys auto-repeat via the OS
   flash(document.querySelector(`button[data-key="${key}"]`));
 });
+
+// Navigation mode: D-pad buttons or a swipe area (remembered per browser)
+function setMode(mode) {
+  $("dpad").hidden = mode === "swipe";
+  $("swipe").hidden = mode !== "swipe";
+  document.querySelectorAll(".mode button").forEach((b) => b.setAttribute("aria-selected", b.dataset.mode === mode));
+  localStorage.setItem("navMode", mode);
+}
+document.querySelectorAll(".mode button").forEach((b) => b.addEventListener("click", () => setMode(b.dataset.mode)));
+setMode(localStorage.getItem("navMode") || "dpad");
+
+// Swipe area: a drag moves one step per SWIPE_STEP px (keep dragging to keep moving);
+// two-finger trackpad scroll moves too; a click without movement is OK.
+const SWIPE_STEP = 48;   // px of drag per step
+const WHEEL_STEP = 70;   // accumulated scroll delta per step
+const WHEEL_GAP = 110;   // ms between scroll steps, so one flick is not many steps
+const pad = $("swipe"), arrow = $("swipe-arrow");
+function stepKey(dx, dy) {
+  return Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? "DPAD_RIGHT" : "DPAD_LEFT") : (dy > 0 ? "DPAD_DOWN" : "DPAD_UP");
+}
+function pulse(key) {
+  const off = { DPAD_UP: [0, -60], DPAD_DOWN: [0, 60], DPAD_LEFT: [-60, 0], DPAD_RIGHT: [60, 0] }[key] || [0, 0];
+  arrow.classList.add("show"); arrow.style.transform = "translate(0, 0)";
+  requestAnimationFrame(() => { arrow.classList.remove("show"); arrow.style.transform = `translate(${off[0]}px, ${off[1]}px)`; });
+}
+function swipeStep(dx, dy) { const key = stepKey(dx, dy); sendKey(key); pulse(key); }
+
+let drag = null;
+pad.addEventListener("pointerdown", (e) => {
+  if (e.button !== 0) return;
+  pad.setPointerCapture(e.pointerId);
+  drag = { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, moved: false };
+});
+pad.addEventListener("pointermove", (e) => {
+  if (!drag) return;
+  const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+  if (Math.max(Math.abs(dx), Math.abs(dy)) < SWIPE_STEP) return;
+  swipeStep(dx, dy);
+  drag.x = e.clientX; drag.y = e.clientY; drag.moved = true;
+});
+pad.addEventListener("pointerup", (e) => {
+  if (drag && !drag.moved && Math.hypot(e.clientX - drag.x0, e.clientY - drag.y0) < 10) {
+    sendKey("DPAD_CENTER"); pad.classList.add("tapped"); setTimeout(() => pad.classList.remove("tapped"), 120);
+  }
+  drag = null;
+});
+pad.addEventListener("pointercancel", () => { drag = null; });
+
+let wheel = { x: 0, y: 0 }, lastWheelStep = -Infinity, wheelReset;
+pad.addEventListener("wheel", (e) => {
+  e.preventDefault();
+  wheel.x += e.deltaX; wheel.y += e.deltaY;
+  clearTimeout(wheelReset); wheelReset = setTimeout(() => { wheel = { x: 0, y: 0 }; }, 200);
+  const now = performance.now();
+  if (now - lastWheelStep < WHEEL_GAP || Math.max(Math.abs(wheel.x), Math.abs(wheel.y)) < WHEEL_STEP) return;
+  // macOS natural scrolling reports finger-up as +deltaY; invert so the focus follows the fingers
+  swipeStep(-wheel.x, -wheel.y);
+  wheel = { x: 0, y: 0 }; lastWheelStep = now;
+}, { passive: false });
 
 // TV panel: switch between saved TVs, find TVs on the network, pair
 let lastState = null;
