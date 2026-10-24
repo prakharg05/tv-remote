@@ -1,12 +1,14 @@
 """Minimal stdlib mDNS / DNS-SD browser (RFC 6762/6763), enough to find TVs.
 
 Sends one-shot "legacy unicast" queries from an ephemeral port, so responders answer
-straight back to us; no multicast group membership or port 5353 binding needed.
-Works the same on macOS, Linux and Windows.
+straight back to us. Some responders (e.g. TCL Android TVs) ignore that and multicast
+their answer to 224.0.0.251:5353, so we also listen there (shared with the OS responder
+via SO_REUSEPORT) when the port can be bound. Works on macOS, Linux and Windows.
 """
 from __future__ import annotations
 
 import random
+import select
 import socket
 import struct
 import time
@@ -103,13 +105,49 @@ def _unescape_instance(full: str, service_type: str) -> str:
     return full[: -len(service_type) - 1] if full.endswith("." + service_type) else full
 
 
+def _lan_ip() -> str | None:
+    """Local IPv4 address the OS routes mDNS through (the Wi-Fi/Ethernet, not a VPN utun)."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(MDNS_ADDR)  # no packet sent; just picks the route
+        ip = s.getsockname()[0]
+        return None if ip.startswith("0.") else ip
+    except OSError:
+        return None
+    finally:
+        s.close()
+
+
+def _multicast_listener(lan_ip: str | None) -> socket.socket | None:
+    """Socket on port 5353 joined to the mDNS group, or None if the port can't be shared."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        if hasattr(socket, "SO_REUSEPORT"):
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+        s.bind(("", MDNS_ADDR[1]))
+        s.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP,
+                     socket.inet_aton(MDNS_ADDR[0]) + socket.inet_aton(lan_ip or "0.0.0.0"))
+        return s
+    except OSError:
+        s.close()
+        return None
+
+
 def browse(service_types: list[str], timeout: float = 2.5) -> list[Service]:
     """Return services of the given types (e.g. "_androidtvremote2._tcp") seen on the LAN."""
     types = [t.rstrip(".") + ".local." for t in service_types]
     records: dict[tuple[str, int], list] = {}
+    lan_ip = _lan_ip()
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 255)
-    sock.settimeout(0.25)
+    if lan_ip:
+        try:
+            sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, socket.inet_aton(lan_ip))
+        except OSError:
+            pass
+    lsock = _multicast_listener(lan_ip)
+    socks = [sock] + ([lsock] if lsock else [])
     try:
         sock.bind(("", 0))
         deadline = time.monotonic() + timeout
@@ -127,20 +165,20 @@ def browse(service_types: list[str], timeout: float = 2.5) -> list[Service]:
                 sock.sendto(_query(questions), MDNS_ADDR)
                 sends += 1
                 next_send = now + 0.7
-            try:
-                data, _ = sock.recvfrom(9000)
-            except socket.timeout:
-                continue
-            try:
-                for name, rtype, value in _parse(data):
-                    if value is not None:
-                        bucket = records.setdefault((name.lower(), rtype), [])
-                        if value not in bucket:
-                            bucket.append(value)
-            except (ValueError, struct.error):
-                continue
+            ready, _, _ = select.select(socks, [], [], 0.25)
+            for s in ready:
+                try:
+                    data, _ = s.recvfrom(9000)
+                    for name, rtype, value in _parse(data):
+                        if value is not None:
+                            bucket = records.setdefault((name.lower(), rtype), [])
+                            if value not in bucket:
+                                bucket.append(value)
+                except (OSError, ValueError, struct.error):
+                    continue
     finally:
-        sock.close()
+        for s in socks:
+            s.close()
     return _assemble(types, records)
 
 
